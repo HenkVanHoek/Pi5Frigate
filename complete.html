@@ -1,0 +1,101 @@
+<p>Deze handleiding beschrijft hoe je Frigate (NVR voor IP-camera's), MQTT (message broker) en Home Assistant (open-source domotica platform) installeert met Docker op een Raspberry Pi 5 die is voorzien van een 1TB M.2 NVMe SSD.</p>
+
+<h2>Vereisten</h2>
+<ul>
+    <li>Raspberry Pi 5</li>
+    <li>1TB M.2 NVMe SSD (aangesloten via een compatibele adapter)</li>
+    <li>Raspberry Pi OS (64-bit aanbevolen)</li>
+    <li>Internetverbinding</li>
+    <li>SSH-toegang tot je Raspberry Pi</li>
+</ul>
+
+<h2>Stap 1: Voorbereiding van het Systeem</h2>
+
+<h3>1.1: Installatie van Raspberry Pi OS</h3>
+<p>Zorg ervoor dat Raspberry Pi OS (64-bit Lite of de volledige versie) is geïnstalleerd op je SD-kaart en dat je Raspberry Pi kan opstarten. Configureer SSH tijdens de installatie of via <code>raspi-config</code> na de eerste boot.</p>
+
+<h3>1.2: M.2 SSD Mounten</h3>
+<p>Als je dat nog niet hebt gedaan, zorg ervoor dat je M.2 SSD correct is aangesloten en wordt herkend door het systeem. Je kunt dit controleren met het commando:</p>
+<pre><code>sudo fdisk -l</code></pre>
+<p>Zoek naar een apparaat zoals <code>/dev/nvme0n1</code>.</p>
+ <p>Maak een mount punt voor de SSD:</p>
+<pre><code>sudo mkdir /mnt/ssd</code></pre>
+
+<p>Mount de partitie op de SSD.  Vervang `/dev/nvme0n1p1` door de juiste partitie van de SSD.</p>
+<pre><code>sudo mount /dev/nvme0n1p1 /mnt/ssd</code></pre>
+
+ <p>Om de SSD automatisch te mounten bij het opstarten, voeg je de volgende regel toe aan `/etc/fstab`. Gebruik `blkid` om de UUID van je SSD te vinden:</p>
+ <pre><code>sudo blkid</code></pre>
+ <p>Voeg dan deze regel toe aan `/etc/fstab`, vervang de UUID en mount point indien nodig:</p>
+ <pre><code>UUID=deine-ssd-uuid /mnt/ssd ext4 defaults,nofail 0 2</code></pre>
+
+<h3>1.3: Docker en Docker Compose Installeren</h3>
+<p>Installeer Docker en Docker Compose met de volgende commando's:</p>
+<pre><code>sudo apt update
+sudo apt install -y docker.io docker-composeVoeg je gebruikersaccount toe aan de docker groep om commando's zonder sudo te kunnen uitvoeren (optioneel, maar handig):sudo usermod -aG docker $USERnewgrp dockerControleer de installatie:docker --versiondocker-compose --version<h2>Stap 2: Docker Compose Configuratie</h2>
+
+<p>Maak een nieuwe directory voor je Docker Compose bestanden:</p>
+<pre><code>mkdir ~/docker
+cd ~/dockermkdir frigatecd frigate<p>Maak een <code>docker-compose.yml</code> bestand met de volgende inhoud:</p>
+<pre><code class="language-yaml">version: '3.9'
+services:mqtt:container_name: mqttimage: eclipse-mosquitto:latestports:- "1883:1883"- "9001:9001"volumes:- ./mqtt/config:/mosquitto/config- ./mqtt/data:/mosquitto/data- ./mqtt/log:/mosquitto/logrestart: unless-stoppedfrigate:container_name: frigateimage: ghcr.io/blakeblackshear/frigate:stableshm_size: 64mbprivileged: true # Vereist voor hardware acceleratie (Coral)ports:- "5000:5000"- "8554:8554" # RTSP feeds- "8555:8555/tcp" # WebRTC audio- "8555:8555/udp" # WebRTC audiovolumes:- /dev/shm:/dev/shm- ./config:/config- /mnt/ssd/frigate/clips:/media/frigate/clips # Gebruik het mount punt van de SSD- /mnt/ssd/frigate/recordings:/media/frigate/recordings # Gebruik het mount punt van de SSDenvironment:FRIGATE_MQTT_HOST: mqttdepends_on:- mqttrestart: unless-stoppedhomeassistant:container_name: homeassistantimage: ghcr.io/home-assistant/home-assistant:stablevolumes:- ./homeassistant/config:/config- /etc/localtime:/etc/localtime:roports:- "8123:8123"restart: unless-stoppeddepends_on:- mqttLet op:  Zorg ervoor dat de paden /mnt/ssd/frigate/clips en /mnt/ssd/frigate/recordings overeenkomen met waar je de M.2 SSD hebt gemount en dat de juiste mappen op de SSD bestaan.  Je moet mogelijk eerst de directories op je SSD aanmaken:sudo mkdir -p /mnt/ssd/frigate/clips /mnt/ssd/frigate/recordingssudo chown -R $USER:$USER /mnt/ssd/frigate # Zorg ervoor dat de gebruiker de juiste rechten heeft<h3>2.1: MQTT Configuratie (Optioneel)</h3>
+<p>Voor de meeste basis setups is de standaard configuratie van Mosquitto voldoende. Als je specifieke gebruikers of geavanceerde instellingen wilt configureren, maak dan een <code>mqtt/config/mosquitto.conf</code> bestand aan.</p>
+<pre><code>mkdir -p ~/docker/frigate/mqtt/config
+nano ~/docker/frigate/mqtt/config/mosquitto.confVoeg hier je gewenste configuratie toe (bijvoorbeeld gebruikers met wachtwoorden).<h3>2.2: Frigate Configuratie</h3>
+<p>Maak een <code>config</code> directory voor Frigate:</p>
+<pre><code>mkdir ~/docker/frigate/config
+nano ~/docker/frigate/config/config.ymlVoeg hier je Frigate configuratie toe. Een eenvoudig voorbeeld:mqtt:host: mqttcameras:woonkamer:ffmpeg:inputs:- path: rtsp://gebruiker:wachtwoord@IP_VAN_JE_CAMERA:554/live # Vervang met je camera RTSP URL- path: rtsp://gebruiker:wachtwoord@IP_VAN_JE_CAMERA:554/sub # Optionele sub streamhwaccel_args: preset-rpi4 # Of andere hardware acceleratie optiesdetect:fps: 5objects:track:- person- dog- catsnapshots:enabled: trueretain:default: 7 # Dagenrecord:enabled: trueretain:days: 30Belangrijk: Vervang rtsp://gebruiker:wachtwoord@IP_VAN_JE_CAMERA:554/live met de RTSP URL van je IP-camera. Pas de objects en andere instellingen aan naar wens. Raadpleeg de Frigate documentatie voor alle configuratieopties.<h3>2.3: Home Assistant Configuratie</h3>
+<p>Maak een <code>homeassistant/config</code> directory:</p>
+<pre><code>mkdir -p ~/docker/frigate/homeassistant/config</code></pre>
+<p>De eerste keer dat je Home Assistant start, zal het deze directory vullen met basisconfiguratiebestanden. Je kunt deze later aanpassen via de webinterface van Home Assistant.</p>
+
+<h2>Stap 3: Starten van de Containers</h2>
+
+<p>Navigeer naar de <code>~/docker/frigate</code> directory en start de Docker containers:</p>
+<pre><code>cd ~/docker/frigate
+docker-compose up -dDit downloadt de benodigde Docker images en start de containers op de achtergrond.<h2>Stap 4: Toegang tot de Webinterfaces</h2>
+<ul>
+    <li><strong>Frigate:</strong> Open je webbrowser en ga naar <code>http://&lt;IP_VAN_JE_RASPBERRY_PI&gt;:5000</code>.</li>
+    <li><strong>MQTT (geen webinterface):</strong> MQTT draait op de achtergrond. Je kunt het configureren in andere applicaties (zoals Home Assistant).</li>
+    <li><strong>Home Assistant:</strong> Open je webbrowser en ga naar <code>http://&lt;IP_VAN_JE_RASPBERRY_PI&gt;:8123</code>. De eerste keer zal het even duren voordat Home Assistant is opgestart en je wordt door een onboarding proces geleid.</li>
+</ul>
+
+<h2>Stap 5: Integratie van Frigate en MQTT in Home Assistant</h2>
+
+<h3>5.1: MQTT Integratie</h3>
+<ol>
+    <li>Ga in Home Assistant naar "Instellingen" -> "Apparaten en Diensten".</li>
+    <li>Klik op "+ Integratie toevoegen".</li>
+    <li>Zoek naar "MQTT" en klik erop.</li>
+    <li>Configureer de MQTT broker met de volgende gegevens:
+        <ul>
+            <li><strong>Broker:</strong> <code>mqtt</code> (de naam van de Docker service)</li>
+            <li><strong>Poort:</strong> <code>1883</code></li>
+            <li>Indien je gebruikersnaam en wachtwoord hebt ingesteld in <code>mosquitto.conf</code>, vul deze dan hier in.</li>
+        </ul>
+    </li>
+    <li>Klik op "Verzenden".</li>
+</ol>
+
+<h3>5.2: Frigate Integratie</h3>
+<ol>
+    <li>Ga in Home Assistant naar "Instellingen" -> "Apparaten en Diensten".</li>
+    <li>Klik op "+ Integratie toevoegen".</li>
+    <li>Zoek naar "Frigate" en klik erop.</li>
+    <li>Vul de URL van je Frigate instantie in: <code>http://&lt;IP_VAN_JE_RASPBERRY_PI&gt;:5000</code>.</li>
+    <li>Klik op "Verzenden".</li>
+    <li>Vink de entiteiten aan die je wilt toevoegen aan Home Assistant (bijvoorbeeld camera's, objectdetectie sensoren) en klik op "Verzenden".</li>
+</ol>
+
+<h2>Stap 6: Monitoring en Onderhoud</h2>
+
+<p>Je kunt de status van de Docker containers controleren met:</p>
+<pre><code>docker ps</code></pre>
+<p>Om de logs van een specifieke container te bekijken (bijvoorbeeld Frigate):</p>
+<pre><code>docker logs -f frigate</code></pre>
+<p>Om de containers te stoppen en te herstarten:</p>
+<pre><code>docker-compose stop
+docker-compose startOm alle containers te stoppen en te verwijderen (wees voorzichtig met deze commando's):docker-compose down -v<h2>Gefeliciteerd!</h2>
+<p>Je hebt nu Frigate, MQTT en Home Assistant draaiend onder Docker op je Raspberry Pi 5 met een 1TB M.2 SSD. Je kunt nu je IP-camera's configureren in Frigate en de detecties en live feeds integreren in Home Assistant voor je domotica automatiseringen.</p>
+
+<p>Raadpleeg de documentatie van <a href="[https://docs.frigate.video/](https://docs.frigate.video/)" target="_blank">Frigate</a> en <a href="[https://www.home-assistant.io/docs/](https://www.home-assistant.io/docs/)" target="_blank">Home Assistant</a> voor geavanceerdere configuraties en mogelijkheden.</p>
